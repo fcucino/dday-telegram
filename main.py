@@ -20,8 +20,8 @@ from urllib3.util import Retry
 
 BOT_TOKEN = os.environ['BOT_TOKEN']
 TELEGRAM_API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
-TELEGRAM_CHANNEL = '@ildolomitinews'
-TELEGRAM_LOGS_CHANNEL = -1001626800013
+TELEGRAM_CHANNEL = '@dday_it_feed'
+TELEGRAM_LOGS_CHANNEL = os.environ['TG_LOGS_CHANNEL_ID']
 
 DATABASE_PATH = os.environ.get('DATABASE_PATH', 'ildolomiti.db')
 
@@ -35,9 +35,11 @@ db = SqliteDatabase(DATABASE_PATH)
 
 
 class Article(Model):
-    post_id = IntegerField(null=True)
+    post_id = TextField(null=True)
     title = TextField()
+    description = TextField()
     link = TextField()
+    image = TextField()
     published = IntegerField()
     telegram_message_id = IntegerField(null=True)
 
@@ -49,7 +51,7 @@ class Article(Model):
 class TelegramMessage:
     title: str
     link: str
-    tags: list[str]
+    tags: list
     description: str
     image: str
 
@@ -57,14 +59,14 @@ class TelegramMessage:
 def check():
     logger.info('Checking...')
 
-    feed = feedparser.parse('https://www.ildolomiti.it/rss.xml?_=' + str(int(time.time())))
+    feed = feedparser.parse('https://www.dday.it/rss?_=' + str(int(time.time())))
 
     if Article.select().count() == 0:
         first_run(feed)
         return
 
     for entry in reversed(feed.entries):
-        article = Article.get_or_none(link=entry.link)
+        article = Article.get_or_none(link=entry.links[0].href)
         if not article:
             process_new_article(entry)
 
@@ -76,8 +78,10 @@ def first_run(feed):
     for entry in reversed(feed.entries):
         article = Article(
             post_id=None,
-            title=entry.title,
-            link=entry.link,
+            title=entry.title.strip(),
+            description=strip_description(entry.summary),
+            link=entry.links[0].href,
+            image=entry.links[1].href,
             published=int(time.mktime(entry.published_parsed)),
             telegram_message_id=None
         )
@@ -86,6 +90,7 @@ def first_run(feed):
 
 
 def process_new_article(entry):
+    """
     tag = re.match(r'https://www\.ildolomiti\.it/([a-z-]+)/', entry.link)
     tag = tag.group(1) if tag else None
     if tag == 'blog' or tag == 'necrologi' or tag == 'video':
@@ -97,19 +102,20 @@ def process_new_article(entry):
         tags = [t for t in tags if len(t) > 1]
     else:
         tags = [tag]
-
-    details = fetch_article_details(entry.link)
+    """
+    details = fetch_article_details(entry.links[0].href)
+    
 
     message = TelegramMessage(
         title=entry.title.strip(),
-        link=entry.link,
-        tags=tags + details['tags'],
-        description=details['description'] or entry.description,
-        image=details['image'] or 'fallback.jpg',
+        description=strip_description(entry.summary),
+        link=entry.links[0].href,
+        image=entry.links[1].href,
+        tags=details['tags'],
     )
 
-    # Title is different, since we could match the post by post ID but couldn't by link/title
-    if details['post_id'] and (article := Article.get_or_none(post_id=details['post_id'])):
+    # Article already exists
+    if article := Article.get_or_none(link=message.link):
         article: Article
         logger.info(f'Updating article: {entry.link} (old: {article.link})')
         if not article.telegram_message_id:
@@ -125,16 +131,18 @@ def process_new_article(entry):
         article.save()
     # Otherwise assume that it's new
     else:
-        logger.info(f'Sending article: {entry.link}')
+        logger.info(f'Sending article: {message.link}')
         try:
             message_id = send_message(message)
         except RequestException:
             logger.exception('Error sending message')
             return  # so that it's retried later
         Article.create(
-            post_id=details['post_id'],
+            #post_id=message.link,
             title=message.title,
+            description=message.description,
             link=message.link,
+            image=message.image,
             published=time.mktime(entry.published_parsed),
             telegram_message_id=message_id
         )
@@ -143,9 +151,9 @@ def process_new_article(entry):
 def fetch_article_details(link: str) -> dict:
     resp = requests.get(
         link + '?_=' + str(int(time.time())),  # fix for 404 ending up in the dolomiti cache
-        headers={
-            'User-Agent': 'Il Dolomiti Telegram (+https://github.com/matteocontrini/ildolomiti-telegram)'
-        },
+        #headers={
+        #    'User-Agent': 'Il Dolomiti Telegram (+https://github.com/matteocontrini/ildolomiti-telegram)'
+        #},
         timeout=10
     )
 
@@ -153,33 +161,19 @@ def fetch_article_details(link: str) -> dict:
 
     soup = BeautifulSoup(resp.text, 'html.parser')
 
-    post_id = None
-    description = None
-    image = None
+    tags = []
 
-    article = soup.select_one('article[id^="node-"]')
-    if article:
-        post_id = article['id'].split('-')[1]
-        description = article.find('div', class_='artSub')
-        if description:
-            description = description.text.strip()
+    categories = soup.select_one('section.article-category-tags')
+    if categories:
+        tags = categories.find_all('a', class_='category-tag')
+        if len(tags) > 0:
+            tags = [re.sub(r"\s+", "", tag.text, flags=re.UNICODE) for tag in tags]
         else:
-            logger.error('Description not found')
-        image_url = soup.find('meta', property='og:image')
-        if image_url:
-            image_url = image_url['content']
-            image = download_image(image_url)
-        else:
-            logger.error('Image meta tag not found')
+            logger.error('Tags not found')
     else:
-        logger.error('Article node not found')
-
-    tags = ['belluno'] if 'section="BELLUNO"' in resp.text else []
+        logger.error('Categories node not found')
 
     return {
-        'post_id': post_id,
-        'description': description,
-        'image': image,
         'tags': tags,
     }
 
@@ -214,7 +208,7 @@ def send_message(message: TelegramMessage, telegram_message_id=None) -> int:
     if message.description:
         msg += f'\n\n<i>{telegram_escape(message.description)}</i>'
 
-    msg += f'\n\n📰 <a href="{message.link}">Leggi articolo</a>'
+    msg += f'\n\n📰 <a href="{message.link}">Leggi</a>'
 
     if telegram_message_id:
         payload = {
@@ -229,12 +223,11 @@ def send_message(message: TelegramMessage, telegram_message_id=None) -> int:
             'chat_id': TELEGRAM_CHANNEL,
             'caption': msg,
             'parse_mode': 'HTML',
+            'photo': message.image,
         }
         resp = requests.post(f'{TELEGRAM_API_URL}/sendPhoto',
                              data=payload,
-                             files={
-                                 'photo': open(message.image, 'rb')
-                             })
+        )
 
     # Error while editing
     if resp.status_code != 200 and telegram_message_id:
@@ -261,7 +254,7 @@ def send_log(article: Article, entry):
             'text': f'{diff[0]}\n\n'
                     f'{diff[1]}\n\n'
                     f'<code>{telegram_escape(article.link)}</code>\n\n'
-                    f'<code>{telegram_escape(entry.link)}</code>\n\n'
+                    f'<code>{telegram_escape(entry.links[0].href)}</code>\n\n'
                     f'Message ID: <code>{article.telegram_message_id}</code>',
             'parse_mode': 'HTML',
         })
@@ -269,7 +262,7 @@ def send_log(article: Article, entry):
         logger.exception('Error sending log')
 
 
-def get_diff(old: str, new: str) -> list[str]:
+def get_diff(old: str, new: str) -> list:
     removed_from_old = get_diff_removals(old, new)
     removed_from_new = get_diff_removals(new, old)
 
@@ -324,6 +317,11 @@ def get_diff_removals(first: str, second: str) -> list:
 def telegram_escape(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
+def strip_description(description: str) -> str:
+    description = re.sub(r'<img.*/>', '', description)
+    description = re.sub(r'<a.*/a>', '', description)
+    description = re.sub(r'\s+', ' ', description)
+    return description
 
 def clean():
     logger.info('Cleaning old articles')
