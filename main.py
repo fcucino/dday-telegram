@@ -23,7 +23,7 @@ TELEGRAM_API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 TELEGRAM_CHANNEL = '@dday_it_feed'
 TELEGRAM_LOGS_CHANNEL = os.environ['TG_LOGS_CHANNEL_ID']
 
-DATABASE_PATH = os.environ.get('DATABASE_PATH', 'ildolomiti.db')
+DATABASE_PATH = os.environ.get('DATABASE_PATH', 'dday.db')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%dT%H:%M:%S%z', stream=sys.stdout)
