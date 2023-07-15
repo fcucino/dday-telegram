@@ -35,13 +35,13 @@ db = SqliteDatabase(DATABASE_PATH)
 
 
 class Article(Model):
-    post_id = TextField(null=True)
     title = TextField()
     description = TextField()
     link = TextField()
     image = TextField()
     published = IntegerField()
-    telegram_message_id = IntegerField(null=True)
+    updated = IntegerField()
+    telegram_message_id = IntegerField(null=True, unique=True)
 
     class Meta:
         database = db
@@ -67,7 +67,8 @@ def check():
 
     for entry in reversed(feed.entries):
         article = Article.get_or_none(link=entry.links[0].href)
-        if not article:
+
+        if (not article or (int(time.mktime(entry.updated_parsed)) > article.updated)):
             process_new_article(entry)
 
     logger.info('Done!')
@@ -83,6 +84,7 @@ def first_run(feed):
             link=entry.links[0].href,
             image=entry.links[1].href,
             published=int(time.mktime(entry.published_parsed)),
+            updated=int(time.mktime(entry.updated_parsed)),
             telegram_message_id=None
         )
         article.save()
@@ -90,22 +92,8 @@ def first_run(feed):
 
 
 def process_new_article(entry):
-    """
-    tag = re.match(r'https://www\.ildolomiti\.it/([a-z-]+)/', entry.link)
-    tag = tag.group(1) if tag else None
-    if tag == 'blog' or tag == 'necrologi' or tag == 'video':
-        return
-
-    # es. "ricerca-e-universita" -> #ricerca #universita
-    if '-' in tag:
-        tags = tag.split('-')
-        tags = [t for t in tags if len(t) > 1]
-    else:
-        tags = [tag]
-    """
     details = fetch_article_details(entry.links[0].href)
     
-
     message = TelegramMessage(
         title=entry.title.strip(),
         description=strip_description(entry.summary),
@@ -115,20 +103,25 @@ def process_new_article(entry):
     )
 
     # Article already exists
-    if article := Article.get_or_none(link=message.link):
+    if article := Article.get_or_none(link=entry.links[0].href):
         article: Article
-        logger.info(f'Updating article: {entry.link} (old: {article.link})')
+
+        logger.info(f'Updating article: {entry.links[0].href} (old: {article.link})')
         if not article.telegram_message_id:
-            logger.error('Article has no telegram_message_id, skipping')
+            logger.warning('Article has no telegram_message_id, skipping')
+            return
         try:
-            send_message(message, article.telegram_message_id)
+            send_message(message, article.telegram_message_id, entry.updated)
         except RequestException:
             logger.exception('Error updating message')
             return  # so that it's retried later
-        send_log(article, entry)
-        article.title = message.title
-        article.link = message.link
+        
+        # send_log(article, entry)
+        article.title = entry.title
+        article.link = entry.links[0].href
+        article.updated = int(time.mktime(entry.updated_parsed))
         article.save()
+
     # Otherwise assume that it's new
     else:
         logger.info(f'Sending article: {message.link}')
@@ -138,12 +131,12 @@ def process_new_article(entry):
             logger.exception('Error sending message')
             return  # so that it's retried later
         Article.create(
-            #post_id=message.link,
             title=message.title,
             description=message.description,
             link=message.link,
             image=message.image,
             published=time.mktime(entry.published_parsed),
+            updated=time.mktime(entry.updated_parsed),
             telegram_message_id=message_id
         )
 
@@ -156,7 +149,6 @@ def fetch_article_details(link: str) -> dict:
         #},
         timeout=10
     )
-
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, 'html.parser')
@@ -196,7 +188,7 @@ def download_image(image_url: str) -> Optional[str]:
         return None
 
 
-def send_message(message: TelegramMessage, telegram_message_id=None) -> int:
+def send_message(message: TelegramMessage, telegram_message_id=None, updated_time=None) -> int:
     msg = ''
     if message.tags:
         for tag in message.tags:
@@ -208,9 +200,12 @@ def send_message(message: TelegramMessage, telegram_message_id=None) -> int:
     if message.description:
         msg += f'\n\n<i>{telegram_escape(message.description)}</i>'
 
-    msg += f'\n\n📰 <a href="{message.link}">Leggi</a>'
+    msg += f'\n\n📰 <a href="{message.link}">Leggi articolo</a>'
 
-    if telegram_message_id:
+    if telegram_message_id and updated_time:
+        # msg += f'\n\n<i>EDIT: {time.strftime("%d/%m/%Y %H:%M", updated_time)}</i>'
+        msg += f'\n\n<i>EDIT: {updated_time}</i>'
+
         payload = {
             'chat_id': TELEGRAM_CHANNEL,
             'message_id': telegram_message_id,
