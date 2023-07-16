@@ -109,7 +109,11 @@ def process_new_article(entry):
         logger.info(f'Updating article: {entry.links[0].href} (old: {article.link})')
         if not article.telegram_message_id:
             logger.warning('Article has no telegram_message_id, skipping')
+            # fix for articles added on the first run and never sent
+            article.updated = int(time.mktime(entry.updated_parsed))
+            article.save()
             return
+        
         try:
             send_message(message, article.telegram_message_id, entry.updated)
         except RequestException:
