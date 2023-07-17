@@ -23,6 +23,9 @@ TELEGRAM_API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 TELEGRAM_CHANNEL = '@dday_it_feed'
 TELEGRAM_LOGS_CHANNEL = os.environ['TG_LOGS_CHANNEL_ID']
 
+UA = 'DDay.it News Telegram (+https://github.com/turbostar190/dday-telegram)'
+feedparser.USER_AGENT = UA
+
 DATABASE_PATH = os.environ.get('DATABASE_PATH', 'dday.db')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s - %(message)s',
@@ -148,9 +151,9 @@ def process_new_article(entry):
 def fetch_article_details(link: str) -> dict:
     resp = requests.get(
         link + '?_=' + str(int(time.time())),  # fix for 404 ending up in the dolomiti cache
-        #headers={
-        #    'User-Agent': 'Il Dolomiti Telegram (+https://github.com/matteocontrini/ildolomiti-telegram)'
-        #},
+        headers={
+            'User-Agent': UA
+        },
         timeout=10
     )
     resp.raise_for_status()
