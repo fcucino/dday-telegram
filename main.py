@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import time
+import string
 from dataclasses import dataclass
 from difflib import ndiff
 from hashlib import md5
@@ -165,12 +166,15 @@ def fetch_article_details(link: str) -> dict:
     categories = soup.select_one('section.article-category-tags')
     if categories:
         tags = categories.find_all('a', class_='category-tag')
-        if len(tags) > 0:
-            tags = [re.sub(r"\s+", "", tag.text, flags=re.UNICODE) for tag in tags]
-        else:
-            logger.error('Tags not found')
     else:
-        logger.error('Categories node not found')
+        # dmove
+        pass # doesn't work because of the "no js" overlay
+        categories = soup.select_one('div.tags')
+        if categories:
+            tags = categories.find_all('span', class_='tag')
+
+    if len(tags) > 0:
+        tags = [re.sub(r"\s+", "", list(tag.strings)[0], flags=re.UNICODE) for tag in tags]
 
     return {
         'tags': tags,
