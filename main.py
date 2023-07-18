@@ -201,12 +201,14 @@ def download_image(image_url: str) -> Optional[str]:
 
 def send_message(message: TelegramMessage, telegram_message_id=None, updated_time=None) -> int:
     msg = ''
-    if message.tags:
-        for tag in message.tags:
-            msg += f'#{tag} '
-        msg += '— '
 
     msg += f'<strong>{telegram_escape(message.title)}</strong>'
+    
+    if message.tags:
+        msg += '\n'
+        for tag in message.tags:
+            msg += f'#{tag} '
+        # msg += '— '
 
     if message.description:
         msg += f'\n\n<i>{telegram_escape(message.description)}</i>'
