@@ -72,7 +72,7 @@ def check():
     for entry in reversed(feed.entries):
         article = Article.get_or_none(link=entry.links[0].href)
 
-        if (not article or (int(time.mktime(entry.updated_parsed)) > article.updated)):
+        if (not article): # or (int(time.mktime(entry.updated_parsed)) > article.updated) # skip updated check for now
             process_new_article(entry)
 
     logger.info('Done!')
