@@ -18,6 +18,7 @@ from peewee import SqliteDatabase, Model, TextField, IntegerField
 from requests import RequestException
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+from urllib.parse import urlparse
 
 BOT_TOKEN = os.environ['BOT_TOKEN']
 TELEGRAM_API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
@@ -60,6 +61,15 @@ class TelegramMessage:
     image: str
 
 
+def parse_url(entry) -> str:
+    url = entry.links[0].href
+    
+    parsed = urlparse(url)
+    if ("www" not in parsed.netloc):
+        parsed = parsed._replace(netloc="www." + parsed.netloc)
+    return parsed.geturl()
+
+
 def check():
     logger.info('Checking...')
 
@@ -70,7 +80,7 @@ def check():
         return
 
     for entry in reversed(feed.entries):
-        article = Article.get_or_none(link=entry.links[0].href)
+        article = Article.get_or_none(link=parse_url(entry))
 
         if (not article): # or (int(time.mktime(entry.updated_parsed)) > article.updated) # skip updated check for now
             process_new_article(entry)
@@ -85,7 +95,7 @@ def first_run(feed):
             post_id=None,
             title=entry.title.strip(),
             description=strip_description(entry.summary),
-            link=entry.links[0].href,
+            link=parse_url(entry),
             image=entry.links[1].href,
             published=int(time.mktime(entry.published_parsed)),
             updated=int(time.mktime(entry.updated_parsed)),
@@ -96,21 +106,21 @@ def first_run(feed):
 
 
 def process_new_article(entry):
-    details = fetch_article_details(entry.links[0].href)
+    details = fetch_article_details(parse_url(entry))
     
     message = TelegramMessage(
         title=entry.title.strip(),
         description=strip_description(entry.summary),
-        link=entry.links[0].href,
+        link=parse_url(entry),
         image=entry.links[1].href,
         tags=details['tags'],
     )
 
     # Article already exists
-    if article := Article.get_or_none(link=entry.links[0].href):
+    if article := Article.get_or_none(link=parse_url(entry)):
         article: Article
 
-        logger.info(f'Updating article: {entry.links[0].href} (old: {article.link})')
+        logger.info(f'Updating article: {parse_url(entry)} (old: {article.link})')
         if not article.telegram_message_id:
             logger.warning('Article has no telegram_message_id, skipping')
             # fix for articles added on the first run and never sent
@@ -126,7 +136,7 @@ def process_new_article(entry):
         
         # send_log(article, entry)
         article.title = entry.title
-        article.link = entry.links[0].href
+        article.link = parse_url(entry)
         article.updated = int(time.mktime(entry.updated_parsed))
         article.save()
 
@@ -262,7 +272,7 @@ def send_log(article: Article, entry):
             'text': f'{diff[0]}\n\n'
                     f'{diff[1]}\n\n'
                     f'<code>{telegram_escape(article.link)}</code>\n\n'
-                    f'<code>{telegram_escape(entry.links[0].href)}</code>\n\n'
+                    f'<code>{telegram_escape(parse_url(entry))}</code>\n\n'
                     f'Message ID: <code>{article.telegram_message_id}</code>',
             'parse_mode': 'HTML',
         })
