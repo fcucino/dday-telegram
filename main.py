@@ -184,7 +184,7 @@ def fetch_article_details(link: str) -> dict:
             tags = categories.find_all('span', class_='tag')
 
     if len(tags) > 0:
-        tags = [re.sub(r"\s+", "", list(tag.strings)[0], flags=re.UNICODE) for tag in tags]
+        tags = [re.sub(r"\s+", "", list(tag.strings)[0], flags=re.UNICODE).replace("-", "") for tag in tags] # remove spaces and dashes
 
     return {
         'tags': tags,
