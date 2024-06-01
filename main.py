@@ -3,7 +3,7 @@ import os
 import re
 import sys
 import time
-import string
+import html
 from dataclasses import dataclass
 from difflib import ndiff
 from hashlib import md5
@@ -22,8 +22,7 @@ from urllib.parse import urlparse
 
 BOT_TOKEN = os.environ['BOT_TOKEN']
 TELEGRAM_API_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
-TELEGRAM_CHANNEL = '@dday_it_feed'
-TELEGRAM_LOGS_CHANNEL = os.environ['TG_LOGS_CHANNEL_ID']
+TELEGRAM_CHANNEL = os.environ.get('TELEGRAM_CHANNEL', '@dday_it_feed')
 
 UA = 'DDay.it News Telegram (+https://github.com/turbostar190/dday-telegram)'
 feedparser.USER_AGENT = UA
@@ -76,11 +75,13 @@ def check():
     feed = feedparser.parse('https://www.dday.it/rss?_=' + str(int(time.time())))
 
     if Article.select().count() == 0:
+        logger.debug('No articles in database, running first run')
         first_run(feed)
         return
 
     for entry in reversed(feed.entries):
         article = Article.get_or_none(link=parse_url(entry))
+        logger.debug(f'Checking article: {parse_url(entry)}')
 
         if (not article): # or (int(time.mktime(entry.updated_parsed)) > article.updated) # skip updated check for now
             process_new_article(entry)
@@ -112,7 +113,8 @@ def process_new_article(entry):
         title=entry.title.strip(),
         description=strip_description(entry.summary),
         link=parse_url(entry),
-        image=entry.links[1].href,
+        # image=html.unescape(entry.links[1].href),
+        image=download_image(html.unescape(entry.links[1].href)),
         tags=details['tags'],
     )
 
@@ -134,7 +136,6 @@ def process_new_article(entry):
             logger.exception('Error updating message')
             return  # so that it's retried later
         
-        # send_log(article, entry)
         article.title = entry.title
         article.link = parse_url(entry)
         article.updated = int(time.mktime(entry.updated_parsed))
@@ -161,7 +162,7 @@ def process_new_article(entry):
 
 def fetch_article_details(link: str) -> dict:
     resp = requests.get(
-        link + '?_=' + str(int(time.time())),  # fix for 404 ending up in the dolomiti cache
+        link + '?_=' + str(int(time.time())),
         headers={
             'User-Agent': UA
         },
@@ -203,6 +204,7 @@ def download_image(image_url: str) -> Optional[str]:
         filename = 'images/' + md5(image_url.encode('utf-8')).hexdigest()
         with open(filename, 'wb') as f:
             f.write(resp.content)
+        session.close()
         return filename
     except (Exception,):
         logger.exception('Error downloading image')
@@ -218,7 +220,6 @@ def send_message(message: TelegramMessage, telegram_message_id=None, updated_tim
         msg += '\n'
         for tag in message.tags:
             msg += f'#{tag} '
-        # msg += '— '
 
     if message.description:
         msg += f'\n\n<i>{telegram_escape(message.description)}</i>'
@@ -241,11 +242,13 @@ def send_message(message: TelegramMessage, telegram_message_id=None, updated_tim
             'chat_id': TELEGRAM_CHANNEL,
             'caption': msg,
             'parse_mode': 'HTML',
-            'photo': message.image,
+            # 'photo': message.image,
         }
         resp = requests.post(f'{TELEGRAM_API_URL}/sendPhoto',
                              data=payload,
-        )
+                             files={
+                                 'photo': open(message.image, 'rb')
+                             })
 
     # Error while editing
     if resp.status_code != 200 and telegram_message_id:
@@ -256,84 +259,15 @@ def send_message(message: TelegramMessage, telegram_message_id=None, updated_tim
     elif resp.status_code != 200:
         logger.error(f'Error sending message: {resp.text}')
         resp.raise_for_status()
+    
+    message_id = resp.json()['result']['message_id']
+    logger.info(f'Message sent id:{message_id}')
 
-    return resp.json()['result']['message_id']
-
-
-def send_log(article: Article, entry):
-    try:
-        diff = get_diff(
-            telegram_escape(article.title),
-            telegram_escape(entry.title)
-        )
-
-        requests.post(f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage', json={
-            'chat_id': TELEGRAM_LOGS_CHANNEL,
-            'text': f'{diff[0]}\n\n'
-                    f'{diff[1]}\n\n'
-                    f'<code>{telegram_escape(article.link)}</code>\n\n'
-                    f'<code>{telegram_escape(parse_url(entry))}</code>\n\n'
-                    f'Message ID: <code>{article.telegram_message_id}</code>',
-            'parse_mode': 'HTML',
-        })
-    except (Exception,):
-        logger.exception('Error sending log')
-
-
-def get_diff(old: str, new: str) -> list:
-    removed_from_old = get_diff_removals(old, new)
-    removed_from_new = get_diff_removals(new, old)
-
-    offset = 0
-    for group in removed_from_old:
-        start = group[0] + offset
-        end = group[-1] + 1 + offset
-        old = old[:start] + '<b><u>' + old[start:end] + '</u></b>' + old[end:]
-        offset += len('<u></u><b></b>')
-
-    offset = 0
-    for group in removed_from_new:
-        start = group[0] + offset
-        end = group[-1] + 1 + offset
-        new = new[:start] + '<b><u>' + new[start:end] + '</u></b>' + new[end:]
-        offset += len('<u></u><b></b>')
-
-    return [old, new]
-
-
-def get_diff_removals(first: str, second: str) -> list:
-    diff = ndiff(first, second)
-
-    removed = []
-    offset = 0
-
-    for i, s in enumerate(diff):
-        if s[0] == ' ':
-            continue
-        elif s[0] == '+':
-            offset -= 1
-        elif s[0] == '-':
-            removed.append(i + offset)
-
-    groups = []
-    group = []
-    for i in range(len(removed)):
-        if i == 0:
-            group.append(removed[i])
-        elif removed[i] - removed[i - 1] == 1:
-            group.append(removed[i])
-        else:
-            groups.append(group)
-            group = [removed[i]]
-
-    if group:
-        groups.append(group)
-
-    return groups
-
+    return message_id
 
 def telegram_escape(text: str) -> str:
-    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    return html.escape(text)
+    # return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 def strip_description(description: str) -> str:
     description = re.sub(r'<img.*/>', '', description)
