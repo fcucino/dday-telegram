@@ -29,7 +29,7 @@ feedparser.USER_AGENT = UA
 
 DATABASE_PATH = os.environ.get('DATABASE_PATH', 'dday.db')
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s - %(message)s',
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%dT%H:%M:%S%z', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
@@ -39,12 +39,13 @@ db = SqliteDatabase(DATABASE_PATH)
 
 
 class Article(Model):
-    title = cast(str, TextField())
-    description = cast(str, TextField())
-    link = cast(str, TextField())
-    image = cast(str, TextField())
-    published = cast(int, IntegerField())
-    updated = cast(int, IntegerField())
+    id = IntegerField(primary_key=True)
+    title = TextField()
+    description = TextField()
+    link = TextField()
+    image = TextField()
+    published = IntegerField()
+    updated = IntegerField()
     telegram_message_id = cast(Optional[str], IntegerField(null=True, unique=True))
 
     class Meta:
@@ -72,7 +73,13 @@ def parse_url(entry) -> str:
 def check():
     logger.info('Checking...')
 
-    feed = feedparser.parse('https://www.dday.it/rss')
+    latest_article = Article.select().order_by(Article.updated.desc()).first()
+    last_updated = time.gmtime(latest_article.updated) if latest_article else None
+
+    feed = feedparser.parse('https://www.dday.it/rss', modified=last_updated)
+    if feed.status == 304:
+        logger.debug('Feed not modified')
+        return
     if feed.bozo:
         logger.exception('Error parsing feed: %s', feed.bozo_exception)
         sys.exit(1)
@@ -130,7 +137,7 @@ def process_new_article(entry):
         if not article.telegram_message_id:
             logger.warning('Article has no telegram_message_id, skipping')
             # fix for articles added on the first run and never sent
-            article.updated = int(time.mktime(entry.updated_parsed))
+            article.__setattr__('updated', int(time.mktime(entry.updated_parsed)))
             article.save()
             return
         
@@ -141,8 +148,8 @@ def process_new_article(entry):
             return  # so that it's retried later
         
         article.title = entry.title
-        article.link = parse_url(entry)
-        article.updated = int(time.mktime(entry.updated_parsed))
+        article.__setattr__('link', parse_url(entry))
+        article.__setattr__('updated', int(time.mktime(entry.updated_parsed)))
         article.save()
 
     # Otherwise assume that it's new
@@ -189,7 +196,7 @@ def fetch_article_details(link: str) -> dict:
             tags = categories.find_all('span', class_='tag')
 
     if len(tags) > 0:
-        tags = [re.sub(r"\s+", "", list(tag.strings)[0], flags=re.UNICODE).replace("-", "") for tag in tags] # remove spaces and dashes
+        tags = [re.sub(r"\s+", "", tag.get_text(), flags=re.UNICODE).replace("-", "") for tag in tags] # remove spaces and dashes
 
     return {
         'tags': tags,
