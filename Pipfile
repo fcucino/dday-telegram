@@ -4,10 +4,10 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-apscheduler = "*"
-feedparser = "*"
-peewee = "*"
-requests = "*"
+apscheduler = "~=3.11"
+feedparser = "~=6.0"
+peewee = ">=3.15,<4.0"
+requests = "~=2.32"
 beautifulsoup4 = "*"
 
 [dev-packages]
