@@ -5,7 +5,7 @@ import sys
 import time
 import html
 from dataclasses import dataclass
-from difflib import ndiff
+from typing import cast
 from hashlib import md5
 from typing import Optional
 
@@ -29,7 +29,7 @@ feedparser.USER_AGENT = UA
 
 DATABASE_PATH = os.environ.get('DATABASE_PATH', 'dday.db')
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s - %(message)s',
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%dT%H:%M:%S%z', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
@@ -39,13 +39,13 @@ db = SqliteDatabase(DATABASE_PATH)
 
 
 class Article(Model):
-    title = TextField()
-    description = TextField()
-    link = TextField()
-    image = TextField()
-    published = IntegerField()
-    updated = IntegerField()
-    telegram_message_id = IntegerField(null=True, unique=True)
+    title = cast(str, TextField())
+    description = cast(str, TextField())
+    link = cast(str, TextField())
+    image = cast(str, TextField())
+    published = cast(int, IntegerField())
+    updated = cast(int, IntegerField())
+    telegram_message_id = cast(Optional[str], IntegerField(null=True, unique=True))
 
     class Meta:
         database = db
@@ -72,7 +72,11 @@ def parse_url(entry) -> str:
 def check():
     logger.info('Checking...')
 
-    feed = feedparser.parse('https://www.dday.it/rss?_=' + str(int(time.time())))
+    feed = feedparser.parse('https://www.dday.it/rss')
+    if feed.bozo:
+        logger.exception('Error parsing feed: %s', feed.bozo_exception)
+        sys.exit(1)
+        return
 
     if Article.select().count() == 0:
         logger.debug('No articles in database, running first run')
@@ -114,7 +118,7 @@ def process_new_article(entry):
         description=strip_description(entry.summary),
         link=parse_url(entry),
         # image=html.unescape(entry.links[1].href),
-        image=download_image(html.unescape(entry.links[1].href)),
+        image=download_image(html.unescape(entry.links[1].href)) or "",
         tags=details['tags'],
     )
 
@@ -162,7 +166,7 @@ def process_new_article(entry):
 
 def fetch_article_details(link: str) -> dict:
     resp = requests.get(
-        link + '?_=' + str(int(time.time())),
+        link,
         headers={
             'User-Agent': UA
         },
