@@ -77,11 +77,12 @@ def check():
     last_updated = time.gmtime(latest_article.updated) if latest_article else None
 
     feed = feedparser.parse('https://www.dday.it/rss', modified=last_updated)
+    logger.info(f'Feed {len(feed.entries)} entries, version {feed.version}, status {feed.status}, bozo {feed.bozo}')
     if feed.status == 304:
         logger.debug('Feed not modified')
         return
     if feed.bozo:
-        logger.exception('Error parsing feed: %s', feed.bozo_exception)
+        logger.exception('Error parsing feed: %s', str(feed.bozo_exception))
         sys.exit(1)
         return
 
@@ -91,8 +92,9 @@ def check():
         return
 
     for entry in reversed(feed.entries):
-        article = Article.get_or_none(link=parse_url(entry))
-        logger.debug(f'Checking article: {parse_url(entry)}')
+        parsed_url = parse_url(entry)
+        article = Article.get_or_none(link=parsed_url)
+        logger.debug(f'Checking article: {parsed_url}')
 
         if (not article): # or (int(time.mktime(entry.updated_parsed)) > article.updated) # skip updated check for now
             process_new_article(entry)
